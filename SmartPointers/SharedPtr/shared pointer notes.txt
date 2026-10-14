@@ -1,0 +1,497 @@
+SHARED POINTER
+
+For this implementation, an empty SharedPtr has both members set to nullptr.
+ All owners of a nonempty resource share the same data pointer and the same referenceCount pointer, 
+ and the count equals the number of owners.
+ 
+ ---------------------------------------------------------------------------------------------------------------------
+
+The main rule of unique pointers was that only one unique ptr could own an object at a time. 
+
+With shared ptr, multiple pointers can share ownership of one object.
+
+The reference count tracks how many SharedPtr instances currently share ownership of that object.
+
+when the last shared pointer goes out of scope, the object can be destroyed.
+
+For example let's say we have this code
+
+SharedPtr<int> ptr1(new int(42));
+
+{
+    SharedPtr<int> ptr2 = ptr1;
+    SharedPtr<int> ptr3 = ptr2;
+}
+
+When ptr2 and 3 go out of scope, the int (42) will not be destructed, as the owner ptr1 is still "alive"; 
+it will be destructed as soon as ptr1 will go out of scope because when ptr1 "dies", the reference counter will drop to zero.
+
+This means that we need a way to store the reference counter so that it can be properly increased 
+If we choose a regular int, the problem is that every time we copy an object, we would create separate instances of the reference counter
+So the reference counter should be one that is accessible by all shared pointers
+We can create another pointer which acts as a reference counter
+template <typename T>
+class SharedPtr
+{
+private:
+    T* data;
+    int* referenceCount;
+public:
+//Constructor
+
+SharedPtr(T* resource)
+{
+    data = resource;
+	referenceCount = new int(1);
+}
+
+};
+
+The constructor assumes for now that resource is not nullptr so will need to improve/change it 
+
+New constructor 
+
+SharedPtr(T* resource)
+{
+    if (resource != nullptr)
+    {
+        data = resource;
+        referenceCount = new int(1);
+    }
+    else if (resource == nullptr)
+    {
+        data = nullptr;
+        referenceCount = nullptr;
+    }
+}
+---------------------------------------------------------------------------------------------------------------------
+Copy Constructor 
+
+When we create the copy constructor, we should have the copied object increase the reference counter already existing
+and increase it,we do not want a separate reference Counter which might delete objects early or cause double deletion
+
+
+Given that we have implemented nullptr support in the constructor, copy constructor needs to be updated as well
+because, if we have 
+
+SharedPtr<int> ptr1(nullptr);
+SharedPtr<int> ptr2 = ptr1;
+
+when the copy constructor reaches this statement ++(*referenceCount);
+ it dereferences a null pointer causing undefined behavior
+ therefore we need a condition to check if data and refCount of copied pointer are not null
+ (we can actually only check referenceCount)
+
+
+SharedPtr(const SharedPtr& other)
+{
+    data = other.data;
+    referenceCount = other.referenceCount;
+	if(referenceCount != nullptr)
+	{
+		 ++(*referenceCount);
+	}
+    
+}
+
+
+---------------------------------------------------------------------------------------------------------------------------
+
+
+
+### Exception safety in the constructor
+
+When we create a SharedPtr from a raw pointer, two allocations may happen:
+
+1. The managed object is dynamically allocated.
+2. The reference counter is dynamically allocated.
+
+For example:
+
+```cpp
+SharedPtr<Cat> cat(new Cat());
+```
+
+If the Cat is successfully allocated but allocation of the reference counter fails, `new int(1)` throws a `std::bad_alloc` exception.
+
+Because the SharedPtr constructor has not completed, the SharedPtr destructor will not execute.
+
+This means that the dynamically allocated Cat could be leaked.
+
+We can prevent this by using try/catch:
+
+```cpp
+SharedPtr(T* resource)
+{
+    if (resource != nullptr)
+    {
+        data = resource;
+
+        try
+        {
+            referenceCount = new int(1);
+        }
+        catch (const std::bad_alloc& error)
+        {
+            delete resource;
+            throw;
+        }
+    }
+    else
+    {
+        data = nullptr;
+        referenceCount = nullptr;
+    }
+}
+```
+
+If the counter allocation fails:
+
+- The catch block executes.
+- `delete resource` destroys the object we attempted to manage.
+- `throw;` propagates the original exception.
+- The constructor fails without leaking the managed resource.
+
+This is an example of exception safety.
+
+An important principle is that a constructor must clean up resources it has already acquired if a later operation throws an exception.
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Destructor 
+
+We cannot simply do 
+
+delete data 
+
+like with the unique ptr because we would delete the object even if it's owned by other pointers
+So we need to 
+decrease the reference counter 
+then, if it reaches zero, we can delete the object and the reference counter 
+also added checks which prevent the class from dereferencing a pointer when its nullptr
+
+~SharedPtr()
+{
+    if(referenceCount == nullptr)
+	{
+		return;
+	}
+    --(*referenceCount);
+
+    if (*referenceCount == 0)
+    {
+        delete data;
+		delete referenceCount;
+    }
+}
+
+
+-------------------------------------------------------------------------------------------------------------------------------------
+
+COPY ASSIGNMENT 
+
+Let's say we have 
+
+SharedPtr<int> ptr1(new int(10));
+SharedPtr<int> ptr2(new int(20));
+
+ptr2 = ptr1;
+
+in this example, the reference counter of 20 and the integer itself should be destroyed because ptr2 is the only owner of the integer
+However, it might also happen that we have two or more owners of an integer; in this case, the reference counter should decrement, 
+but the integer itself should not be deleted
+
+SharedPtr& operator=(const SharedPtr& other)
+{
+    if (this == &other)
+    {
+        return *this;
+    }
+
+    // Release existing ownership
+    if (referenceCount != nullptr)
+    {
+        --(*referenceCount);
+
+        if (*referenceCount == 0)
+        {
+            delete data;
+            delete referenceCount;
+        }
+    }
+
+    data = other.data;
+	referenceCount = other.referenceCount;
+	if (referenceCount != nullptr)
+{
+    ++(*referenceCount);
+}
+	
+
+    return *this;
+}
+
+---------------------------------------------------------------------------------------------------------------------------------------
+
+MOVE SEMANTICS
+
+We should not increment the reference counter because we are simply transferring the ownership share of pointer
+so after the move, the managed objects have not increased
+
+Move Constructor
+
+SharedPtr(SharedPtr&& other)
+{
+    data = other.data;
+	referenceCount = other.referenceCount;
+	other.data = nullptr;
+	other.referenceCount = nullptr;
+}
+
+Move Assignment 
+
+In case of move assignment, we are working with an existing object that may already own a resource.
+
+So the sequence of action is
+
+Check for self-assignment.
+Release the current ownership, deleting the resources if the reference count reaches zero.
+Transfer other.data and other.referenceCount to the current object
+Leave other in an empty state.
+Return *this
+
+SharedPtr& operator=(SharedPtr&& other)
+{
+    if(this == &other)
+	{
+	 return *this;
+	}
+	
+	// Release existing ownership
+    if (referenceCount != nullptr)
+    {
+        --(*referenceCount);
+
+        if (*referenceCount == 0)
+        {
+            delete data;
+            delete referenceCount;
+        }
+    }
+	
+	data = other.data;
+	referenceCount = other.referenceCount;
+	other.data = nullptr;
+	other.referenceCount = nullptr;	
+	return *this;
+}
+
+we set both other.data and other.referenceCount to nullptr because both pointers will behave as owners of the resource
+ even though counter did not increase
+
+Both ptr1 and ptr2 would point to the same object and reference counter.
+
+The reference count would still be 1.
+
+When ptr1 is destroyed, it could decrease the count to 0 and delete both allocations.
+
+ptr2 would then contain dangling pointers. Accessing the deleted object or reference counter would cause undefined behavior.
+
+----------------------------------------------------------------------------------------------------------------------------------------
+ Copying vs moving shared ownership
+
+When copying a SharedPtr, we create an additional owner.
+
+Example:
+
+```cpp
+SharedPtr<int> ptr1(new int(42));
+SharedPtr<int> ptr2 = ptr1;
+```
+
+Both pointers now share the same managed object and reference counter.
+
+The reference count increases from 1 to 2.
+
+When moving a SharedPtr, we transfer an existing ownership share instead of creating another one.
+
+Example:
+
+```cpp
+SharedPtr<int> ptr1(new int(42));
+SharedPtr<int> ptr2(std::move(ptr1));
+```
+
+After the move:
+
+- ptr1.data = nullptr
+- ptr1.referenceCount = nullptr
+- ptr2.data points to the integer containing 42
+- ptr2.referenceCount points to the counter containing 1
+
+The reference count does not increase.
+
+We set the moved-from pointer's members to nullptr so that its destructor will not release ownership that has already been transferred.
+
+`std::move` itself does not transfer resources. It casts its argument to an rvalue expression, allowing the move constructor or move assignment operator to be selected.
+
+Copying and moving a SharedPtr do not invoke the copy or move constructor of the managed object. They operate on the smart pointer's ownership information.
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+UTILITY FUNCTIONS 
+
+get() should return the raw pointer to the managed object
+
+T* get () const 
+{
+
+return data;
+
+}
+
+---------------------------------------------------------------------------------------------------
+
+use_count() should tell us how many pointers are sharing ownership of the object 
+
+
+int use_count() const
+{
+
+ if(referenceCount == nullptr)
+ {
+		return 0;
+ 
+ }
+ 
+	return *referenceCount;
+
+}
+
+-----------------------------------------------------------------------------------------------------------------------
+
+Operator * 
+
+T& operator*()
+{
+       return *data;
+}
+
+Operator operator-> 
+
+T* operator -> ()
+{
+	return data;
+
+}
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+reset()
+
+For this function, we want 
+
+reference count should decrease 
+the integer should be kept alive until one owner is valid 
+when the owner goes eventually out of scope, we can destroy the integer
+
+
+void reset(T* newResource = nullptr)
+{
+    if (data == newResource)
+    {
+        return;
+    }
+
+    int* newReferenceCount = nullptr;
+
+    // Prepare new ownership information first
+    if (newResource != nullptr)
+    {
+        try
+        {
+            newReferenceCount = new int(1);
+        }
+        catch (const std::bad_alloc& error)
+        {
+            delete newResource;
+            throw;
+        }
+    }
+
+    // Release existing ownership
+    if (referenceCount != nullptr)
+    {
+        --(*referenceCount);
+
+        if (*referenceCount == 0)
+        {
+            delete data;
+            delete referenceCount;
+        }
+    }
+
+    // Adopt new ownership
+    data = newResource;
+    referenceCount = newReferenceCount;
+}
+
+Limitation of this reset function: the caller must provide a genuinely independent resource, not a pointer already managed by another ownership group.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Why constructing two SharedPtr instances from the same raw pointer is dangerous
+
+Consider:
+
+```cpp
+Cat* rawCat = new Cat();
+
+SharedPtr<Cat> cat1(rawCat);
+SharedPtr<Cat> cat2(rawCat);
+```
+
+Both SharedPtr instances point to the same Cat, but each constructor independently allocates a reference counter initialized to 1.
+
+This creates two separate ownership groups for the same resource.
+
+When cat2 is destroyed, its reference count reaches zero and it deletes the Cat.
+
+When cat1 is destroyed, its own reference count also reaches zero and it attempts to delete the same Cat again.
+
+This causes undefined behavior due to double deletion.
+
+The correct way to share ownership is:
+
+```cpp
+SharedPtr<Cat> cat1(new Cat());
+SharedPtr<Cat> cat2 = cat1;
+```
+
+Now the copy constructor makes cat2 share the existing reference counter and increments it.
+
+**Important rule:** Shared ownership should be established by copying or assigning an existing SharedPtr, not by constructing multiple independent SharedPtr instances from the same raw pointer.
+
+### What about get()?
+
+```cpp
+SharedPtr<Cat> cat1(new Cat());
+
+Cat* rawCat = cat1.get();
+
+SharedPtr<Cat> cat2 = cat1;
+```
+
+This is safe.
+
+`get()` returns the raw pointer but does not transfer ownership or increase the reference count.
+
+The copy constructor creates the additional ownership share.
+
+However, the raw pointer returned by get() does not keep the managed object alive. It can become dangling if the final SharedPtr releases ownership.
+
+We should never manually delete a raw pointer obtained through get() while its object is still managed by SharedPtr.
+
