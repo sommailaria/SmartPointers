@@ -1,0 +1,16 @@
+﻿  SharedPtr.cpp
+C:\SmartPointers\SharedPtr\SharedPtr.cpp(170,42): warning C4101: 'error': variabile locale senza riferimenti
+      C:\SmartPointers\SharedPtr\SharedPtr.cpp(170,42):
+      il contesto di creazione dell'istanza del modello (prima il meno recente) è
+          C:\SmartPointers\SharedPtr\SharedPtr.cpp(278,20):
+          vedere il riferimento all'istanza 'SharedPtr<Cat>' di modello classe di cui è in corso la compilazione
+          C:\SmartPointers\SharedPtr\SharedPtr.cpp(155,10):
+          durante la compilazione della funzione membro 'void SharedPtr<Cat>::reset(T *)' di modello classe
+          with
+          [
+              T=Cat
+          ]
+              C:\SmartPointers\SharedPtr\SharedPtr.cpp(288,15):
+              vedere il primo riferimento a 'SharedPtr<Cat>::reset' in 'main'
+  
+  SharedPtr.vcxproj -> C:\SmartPointers\SharedPtr\x64\Debug\SharedPtr.exe
