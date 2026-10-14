@@ -1,0 +1,226 @@
+
+Unique_ptr
+
+What does the class need 
+
+We need to create the smart pointer 
+We need to initalize with an object
+We need a destructor
+Copy constructor and copy assignment should not be allowed
+It needs to support move constructor and move assignment
+It needs to return the stored raw pointer
+It needs to release ownership 
+It needs to replace the owned object deleting the previous one
+We need to access the stored object with *
+We need to access the members of the object with -> 
+
+--------------------------------------------------------------------------------------------------------
+
+Starting the class 
+
+template <typename T>
+class UniquePtr
+{
+private:
+    T* data = nullptr;
+};
+
+As the unique pointer does not need the reference counter we only need the pointer which stores the memory address of the memory object
+
+T* data = nullptr; ensures that a newly default-constructed smart pointer starts empty.
+
+The UniquePtr itself can exist on the stack, while the object it manages is dynamically allocated.
+----------------------------------------------------------------------------------------------------------------------------------------
+Constructor 
+
+The constructor receives a pointer to an object that was already dynamically allocated, and inside of it, 
+we need data to store the object we just passed as parameter
+
+explicit UniquePtr() = default;
+    
+	MyUniquePtr(T* resource) // 
+{
+	data = resource;
+	
+}
+
+The explicit keyword prevents unintended implicit conversions from raw pointers to UniquePtr objects.
+It helps to communicate that the unique ptr is responsible for deleting the object 
+-------------------------------------------------------------------------------------------------------------------------------------------
+
+// Destructor 
+
+We need to automatically destroy the object it owns as soon as the pointer itself is destroyed.
+
+delete data:
+
+Invokes the managed object's destructor (for class types).
+
+Deallocates the dynamically allocated storage.
+
+Does nothing if data is nullptr. (RAII)
+
+
+
+~MyUniquePtr() {
+
+delete data;
+
+}
+
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+We need to disallow copy constructor and copy assignment because copying ownership would produce two smart pointers 
+that believe they own the same resource.
+Both could attempt to delete the same object, resulting in undefined behavior.
+
+MyUniquePtr(const MyUniquePtr& other) = delete;
+
+MyUniquePtr& operator=(const MyUniquePtr& other) = delete;
+
+------------------------------------------------------------------------------------------------------------------------------------------
+Move Constructor 
+
+ptr1 is the original smart pointer that owns an object.
+
+ptr2 is the new smart pointer that will receive ownership.
+
+We want:
+
+ptr2 to acquire ownership of the resource previously owned by ptr1.
+
+ptr1.data to become nullptr.
+
+The managed object to remain at its original memory address.
+
+UniquePtr(UniquePtr&& other)
+{
+    data = other.data;
+    other.data = nullptr;
+}
+
+Example:
+
+UniquePtr<Cat> ptr1(new Cat());
+UniquePtr<Cat> ptr2(std::move(ptr1));
+
+After the move:
+
+ptr1 still exists, but is empty.
+
+ptr2 owns the Cat.
+
+The Cat itself has not been moved or copied.
+
+Important: std::move() does not transfer ownership by itself. 
+It allows the move constructor to be selected. 
+The ownership transfer is performed by the code inside our constructor.
+
+Move Assignment operator 
+
+Move assignment operates on a smart pointer that already exists and may already own a resource.
+
+We need to
+
+Protect against self-move assignment.
+
+Delete the resource previously owned by ptr2.
+
+Transfer the resource address from ptr1 to ptr2.
+
+Set ptr1.data to nullptr.
+
+Return *this
+
+MyUniquePtr& operator=(MyUniquePtr&& other)
+{
+    if (&other == this)
+	{
+		return *this;
+	}
+	delete data;
+	data = other.data;
+	other.data = nullptr;
+	return *this;
+	
+}
+
+
+checking &other == this?
+
+prevents problems in a case such as:
+
+ptr1 = std::move(ptr1)
+
+where we could  the resource and then attempt to transfer ownership from the same object, whose stored pointer would now be invalid.
+------------------------------------------------------------------------------------------------------------------------------------
+
+The get function needs to return the raw pointer 
+
+T* get() const
+{
+    return data;
+}
+
+If the unique ptr subsequently changes which object it owns, 
+the previously returned raw pointer does not automatically update. It may become dangling if the old object is destroyed.
+
+
+----------------------------------------------------------------------------------------------------------------------
+
+The release function needs to release ownership of the managed object without deleting it
+So after running release, we want that our unique ptr stops owning the resource we passed to it 
+But we want to save the currently stored address of the object or it would be lost forever 
+
+The caller is responsible for ensuring the object is eventually destroyed, 
+for example by transferring it to another owner or using delete raw.
+ 
+
+T* release ()
+
+{
+	T* resourceAddress = data;
+	data = nullptr;
+	return resourceAddress;
+	
+	
+}
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+The reset function needs to replace the object we are managing with another one, or to make the smart pointer empty
+Therefore this function needs to:
+
+ Preserve the address of the previously managed object.
+
+Update data to the new address.
+
+Delete the previously managed object.
+
+Ensure the new object is destroyed when the smart pointer eventually goes out of scope (unless ownership is transferred or replaced first).
+
+void reset(T* newResource = nullptr)
+{
+    if (newResource == data)
+	{
+			
+			return;
+	}
+	
+	delete data;
+	data = newResource;
+}
+
+-------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
